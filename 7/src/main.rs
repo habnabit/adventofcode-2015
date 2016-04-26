@@ -3,7 +3,6 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::str::FromStr;
-use std::cell::RefCell;
 
 #[derive(Debug)]
 enum Input {
@@ -103,24 +102,18 @@ impl ElementSpec {
 struct Element {
    spec: ElementSpec,
    name: String,
-   value: RefCell<Option<u16>>,
+   value: Option<u16>,
 }
 
 impl Element {
-   fn set_value(&self, val: u16) {
-      let mut value = self.value.borrow_mut();
-      *value = Some(val);
+   fn set_value(&mut self, val: u16) {
+      self.value = Some(val);
       println!("setting {} as {}", self.name, val);
    }
 
-   fn clear_value(&self) {
-      let mut value = self.value.borrow_mut();
-      *value = None;
+   fn clear_value(&mut self) {
+      self.value = None;
       println!("Clearing {}", self.name);
-   }
-
-   fn value(&self) -> Option<u16> {
-      return self.value.borrow().clone();
    }
 }
 
@@ -139,11 +132,11 @@ impl Circuit {
                    Element {
                      spec: spec.parse::<ElementSpec>().unwrap(),
                      name: name.to_string(),
-                     value: RefCell::new(None),
+                     value: None,
                    });
    }
 
-   fn resolve_input(&self, input: &Input) -> u16 {
+   fn resolve_input(&mut self, input: &Input) -> u16 {
       match input {
          &Input::None => 0,
          &Input::Value(ref v) => *v,
@@ -151,39 +144,41 @@ impl Circuit {
       }
    }
 
-   fn get_value(&self, name: &str) -> u16 {
-      let mut v = 0;
-      if let Some(e) = self.parts.get(&name.to_string()) {
-         let mut value = e.value.borrow_mut();
-         if value.is_none() {
-            *value = Some(
-               e.spec.evaluate(
-                  self.resolve_input(&e.spec.left),
-                  self.resolve_input(&e.spec.right)));
-               println!("Caching {} as {:?}", name, value);
-         }
-         v = value.unwrap().clone();
-      }
-      return v;
+   fn get_value(&mut self, name: &str) -> u16 {
+       let do_update = match self.parts.get(name) {
+           Some(&Element { value: Some(v), .. }) => return v,
+           Some(_) => true,
+           None => false,
+       };
+       if !do_update { return 0; }
+       let mut to_update = self.parts.remove(name).expect("where'd it go");
+       let ret = to_update.spec.evaluate(
+           self.resolve_input(&to_update.spec.left),
+           self.resolve_input(&to_update.spec.right));
+       to_update.set_value(ret);
+       if let Some(prev) = self.parts.insert(name.to_string(), to_update) {
+           panic!("circular reference? something re-inserted {:?} under us: {:?}", name, prev);
+       }
+       return ret;
    }
-   fn clear_cache(&self) {
-      for (k, v) in self.parts.iter() {
+   fn clear_cache(&mut self) {
+      for (_, v) in &mut self.parts {
          v.clear_value();
       }
    }
-   fn force_value(&self, name: &str, val: u16) {
-      if let Some(e) = self.parts.get(&name.to_string()) {
+   fn force_value(&mut self, name: &str, val: u16) {
+      if let Some(e) = self.parts.get_mut(&name.to_string()) {
          e.set_value(val);
       }
    }
- 
+
 }
 
 fn main() {
    let f = File::open("input.txt").unwrap();
    let line_buffer = BufReader::new(&f);
- 
-   let mut circuit = Circuit::new();  
+
+   let mut circuit = Circuit::new();
    for line in line_buffer.lines() {
       let curr = line.unwrap();
       let parts = curr.split(" -> ").collect::<Vec<_>>();
@@ -194,7 +189,7 @@ fn main() {
    circuit.clear_cache();
    circuit.force_value("b", a);
    println!("a is {}", circuit.get_value("a"));
-   
+
 }
 
 #[test]
